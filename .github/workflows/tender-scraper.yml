@@ -2,7 +2,7 @@ name: Tender Scraper
 
 on:
   schedule:
-    - cron: '20 10 * * *'  # 10:20 UTC = 15:50 IST  # Every 5 min(at minute 0)
+    - cron: '*/5 * * * *'   # Every 5 min(at minute 0)
   workflow_dispatch:       # Allow manual runs from GitHub UI
 
 jobs:
