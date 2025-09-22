@@ -1,81 +1,97 @@
+import os
+import json
 import requests
 from bs4 import BeautifulSoup
 import smtplib
-import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-# --- Configuration (from GitHub Actions Secrets) ---
-SENDER_EMAIL = os.environ.get('SENDER_EMAIL')
-APP_PASSWORD = os.environ.get('APP_PASSWORD')
-# Optionally set a different receiver:
-RECEIVER_EMAIL = os.environ.get('RECEIVER_EMAIL', SENDER_EMAIL)
+# --- Configuration (use environment variables for security) ---
+SENDER_EMAIL = os.environ.get("SENDER_EMAIL")
+APP_PASSWORD = os.environ.get("APP_PASSWORD")
+RECEIVER_EMAIL = os.environ.get("RECEIVER_EMAIL", SENDER_EMAIL)
 
-# --- File to store the last tender's URL ---
-LAST_TENDER_FILE = 'last_tender.txt'
+# Folder to store tender JSON files
+DATA_DIR = "data"
+os.makedirs(DATA_DIR, exist_ok=True)
 
+# List of websites and their configurations
+websites = [
+    {
+        'name': 'GIZ',
+        'url': 'https://www.giz.de/en/live-tenders-giz-india#live-tenders',
+        'filename': os.path.join(DATA_DIR, 'giz_tenders.json'),
+        'parse_func': 'parse_giz'
+    },
+    {
+        'name': 'GEDA',
+        'url': 'https://geda.gujarat.gov.in/tenders.html',
+        'filename': os.path.join(DATA_DIR, 'geda_tenders.json'),
+        'parse_func': 'parse_geda'
+    },
+    {
+        'name': 'MAHAURJA',
+        'url': 'https://www.mahaurja.com/tenders',
+        'filename': os.path.join(DATA_DIR, 'mahaurja_tenders.json'),
+        'parse_func': 'parse_mahaurja'
+    },
+    {
+        'name': 'HPPCL',
+        'url': 'https://www.hppcl.in/page/tenders.aspx',
+        'filename': os.path.join(DATA_DIR, 'hppcl_tenders.json'),
+        'parse_func': 'parse_hppcl'
+    }
+]
 
-def get_last_tender_url():
-    """Reads the last known tender URL from a file."""
-    if os.path.exists(LAST_TENDER_FILE):
-        with open(LAST_TENDER_FILE, 'r') as f:
-            return f.read().strip()
-    return None
-
-
-def save_last_tender_url(url):
-    """Saves the latest tender URL to a file."""
-    print(f"Attempting to save URL to file: {LAST_TENDER_FILE}")
-    try:
-        with open(LAST_TENDER_FILE, 'w') as f:
-            f.write(url)
-        print(f"Successfully saved URL to file: {LAST_TENDER_FILE}")
-    except IOError as e:
-        print(f"Error: Could not write to file '{LAST_TENDER_FILE}'.")
-        print(f"Reason: {e}")
-    except Exception as e:
-        print(f"An unexpected error occurred while writing to the file.")
-        print(f"Reason: {e}")
-
-
-def get_latest_tender(url):
-    """Scrapes the main tenders page for the latest tender details."""
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.content, 'html.parser')
-
-        # Find the list of tenders by first finding the heading and then its next sibling list.
-        tender_list = soup.find('h2', string='Live Tenders').find_next_sibling('ul')
-
+# --- Scraper Functions ---
+def parse_giz(soup):
+    tenders = []
+    tender_list = soup.find('h2', string='Live Tenders')
+    if tender_list:
+        tender_list = tender_list.find_next_sibling('ul')
         if tender_list:
-            # Find the very first <li> item, which is the newest tender.
-            latest_tender_li = tender_list.find('li')
-            if latest_tender_li:
-                # Find the <a> tag within the list item
-                link = latest_tender_li.find('a')
-                if link:
-                    return {
-                        'title': link.get_text(strip=True),
-                        'url': link.get('href')
-                    }
-    except requests.exceptions.RequestException as e:
-        print(f"Error during main page scrape: {e}")
-    except Exception as e:
-        print(f"An error occurred during scraping: {e}")
-    return None
+            for li in tender_list.find_all('li'):
+                a = li.find('a')
+                if a:
+                    tenders.append({'title': a.get_text(strip=True), 'url': a.get('href')})
+    return tenders
 
+def parse_geda(soup):
+    tenders = []
+    table = soup.find('table')
+    if table:
+        for a in table.find_all('a'):
+            tenders.append({'title': a.get_text(strip=True), 'url': a.get('href')})
+    return tenders
 
-def get_tender_content(url):
-    """
-    Since the GIZ page doesn't link to full articles, this function
-    will simply return the title and link as the "background knowledge".
-    """
-    return f"Link to tender: {url}\n\nNo additional content pages were found for this tender. Please visit the main page for more information."
+def parse_mahaurja(soup):
+    tenders = []
+    table = soup.find('table')
+    if table:
+        for a in table.find_all('a'):
+            tenders.append({'title': a.get_text(strip=True), 'url': a.get('href')})
+    return tenders
 
+def parse_hppcl(soup):
+    tenders = []
+    table = soup.find('table')
+    if table:
+        for a in table.find_all('a'):
+            tenders.append({'title': a.get_text(strip=True), 'url': a.get('href')})
+    return tenders
 
-def send_alert_email(subject, body):
-    """Sends an email alert using SMTP."""
+def load_seen_tenders(filename):
+    if os.path.exists(filename):
+        with open(filename, 'r') as f:
+            return json.load(f)
+    return []
+
+def save_seen_tenders(filename, tenders):
+    with open(filename, 'w') as f:
+        json.dump(tenders, f)
+
+# --- Email Function ---
+def send_email(subject, body):
     try:
         msg = MIMEMultipart()
         msg['From'] = SENDER_EMAIL
@@ -86,40 +102,43 @@ def send_alert_email(subject, body):
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
             server.login(SENDER_EMAIL, APP_PASSWORD)
             server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_string())
-        print("Email alert sent successfully!")
-
-    except smtplib.SMTPAuthenticationError:
-        print("Authentication error: Please check your email credentials or app password.")
+        print("Email sent successfully.")
     except Exception as e:
-        print(f"An error occurred while sending the email: {e}")
+        print(f"Error sending email: {e}")
 
+# --- Main Scraping Logic ---
+def scrape_website(website):
+    try:
+        response = requests.get(website['url'], timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.content, 'html.parser')
+
+        parse_func = globals()[website['parse_func']]
+        current_tenders = parse_func(soup)
+
+        seen_tenders = load_seen_tenders(website['filename'])
+        new_tenders = [t for t in current_tenders if t not in seen_tenders]
+
+        if new_tenders:
+            body_lines = []
+            for tender in new_tenders:
+                body_lines.append(f"{tender['title']}\n{tender['url']}\n")
+            body = "\n".join(body_lines)
+            send_email(f"New Tenders from {website['name']}", body)
+
+            # Update seen tenders list
+            updated_tenders = seen_tenders + new_tenders
+            save_seen_tenders(website['filename'], updated_tenders)
+            print(f"Found {len(new_tenders)} new tenders on {website['name']}")
+        else:
+            print(f"No new tenders found on {website['name']}")
+
+    except Exception as e:
+        print(f"Error scraping {website['name']}: {e}")
 
 def main():
-    """Main function to run the tender check and send an alert."""
-    tenders_url = "https://www.giz.de/en/live-tenders-giz-india#live-tenders"
-
-    last_tender_url = get_last_tender_url()
-    latest_tender = get_latest_tender(tenders_url)
-
-    if latest_tender and latest_tender['url'] != last_tender_url:
-        print("New tender detected! Processing...")
-
-        # Scrape the full content of the new tender
-        full_content = get_tender_content(latest_tender['url'])
-
-        # Prepare the email
-        subject = f"New GIZ Tender Alert: {latest_tender['title']}"
-        body = f"A new tender has been posted!\n\nTitle: {latest_tender['title']}\nURL: {latest_tender['url']}\n\n--- Tender Details ---\n\n{full_content}"
-
-        # Send the email
-        send_alert_email(subject, body)
-
-        # Save the new tender's URL to prevent duplicate alerts
-        save_last_tender_url(latest_tender['url'])
-
-    else:
-        print("No new tenders found.")
-
+    for website in websites:
+        scrape_website(website)
 
 if __name__ == "__main__":
     main()
